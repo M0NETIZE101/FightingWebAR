@@ -7,11 +7,6 @@
     
     <link rel="stylesheet" href="css/style.css">
     
-    <!-- MediaPipe for hand tracking -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-    
     <!-- Three.js -->
     <script type="importmap">
         {
@@ -26,7 +21,7 @@
     <!-- ===== LOADING ===== -->
     <div id="loading">
         <div class="spinner"></div>
-        <p id="loading-text">Loading Fighter...</p>
+        <p id="loading-text">Loading Fighting Game...</p>
     </div>
 
     <!-- ===== START SCREEN ===== -->
@@ -34,8 +29,9 @@
         <div class="card">
             <div class="logo">🥊</div>
             <h1>AR Fighting Game</h1>
-            <p>Punch, block, and defeat your opponent!<br>Use your hands to fight in AR!</p>
-            <button id="start-btn">⚔️ Start Battle</button>
+            <p id="device-info">Checking device...</p>
+            <p>Punch, block, and defeat your opponent!</p>
+            <button id="start-btn">🎮 Start Game</button>
             <p id="status-text" class="status">Ready</p>
         </div>
     </div>
@@ -71,8 +67,8 @@
         </div>
     </div>
 
-    <!-- ===== AR CONTAINER ===== -->
-    <div id="ar-container"></div>
+    <!-- ===== GAME CONTAINER (AR or Desktop) ===== -->
+    <div id="game-container"></div>
 
     <!-- ===== STATUS MESSAGE ===== -->
     <div id="message"></div>
@@ -90,7 +86,9 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+        import { ARButton } from 'three/addons/webxr/ARButton.js';
         import { HandTracker } from './js/hand-tracker.js';
         import { FightingGame } from './js/game.js';
 
@@ -102,8 +100,9 @@
         const startScreen = document.getElementById('start-screen');
         const startBtn = document.getElementById('start-btn');
         const statusText = document.getElementById('status-text');
+        const deviceInfo = document.getElementById('device-info');
         const message = document.getElementById('message');
-        const container = document.getElementById('ar-container');
+        const container = document.getElementById('game-container');
         const gameUI = document.getElementById('game-ui');
         const playerHealthFill = document.getElementById('player-health-fill');
         const enemyHealthFill = document.getElementById('enemy-health-fill');
@@ -121,13 +120,13 @@
         // ============================================================
         // STATE
         // ============================================================
-        let scene, camera, renderer;
+        let scene, camera, renderer, controls;
         let game = null;
         let handTracker = null;
         let fighterModel = null;
         let enemyModel = null;
-        let isArRunning = false;
-        let hasPermission = false;
+        let isGameRunning = false;
+        let isARMode = false;
         let messageTimeout = null;
 
         // ============================================================
@@ -151,6 +150,28 @@
         }
 
         // ============================================================
+        // CHECK DEVICE SUPPORT
+        // ============================================================
+        async function checkDeviceSupport() {
+            const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+            let isARSupported = false;
+            
+            if (navigator.xr) {
+                try {
+                    isARSupported = await navigator.xr.isSessionSupported('immersive-ar');
+                } catch (e) {
+                    isARSupported = false;
+                }
+            }
+            
+            return {
+                isMobile,
+                isARSupported,
+                isDesktop: !isMobile
+            };
+        }
+
+        // ============================================================
         // LOAD FIGHTER MODEL
         // ============================================================
         async function loadFighterModel() {
@@ -164,22 +185,18 @@
                 loader.setDRACOLoader(dracoLoader);
 
                 loader.load(
-                    './models/fighter/fighter.glb',  // ← YOUR FILE PATH
+                    './models/fighter/fighter.glb',
                     (gltf) => {
                         debug('✅ Fighter model loaded!');
                         const model = gltf.scene;
-                        
-                        // Scale and position
                         model.scale.set(0.8, 0.8, 0.8);
                         model.position.set(0, 0, 0);
                         
-                        // Setup animations
                         if (gltf.animations && gltf.animations.length > 0) {
                             const mixer = new THREE.AnimationMixer(model);
                             const action = mixer.clipAction(gltf.animations[0]);
                             action.play();
                             model.userData.mixer = mixer;
-                            debug('🎬 Animation playing');
                         }
                         
                         resolve(model);
@@ -197,16 +214,57 @@
         }
 
         // ============================================================
-        // SETUP THREE.JS
+        // CREATE PLACEHOLDER FIGHTER
         // ============================================================
-        function setupThreeScene() {
+        function createPlaceholderFighter(color = 0x00d4ff) {
+            const group = new THREE.Group();
+            
+            const body = new THREE.Mesh(
+                new THREE.BoxGeometry(0.3, 0.4, 0.2),
+                new THREE.MeshStandardMaterial({ color, metalness: 0.3 })
+            );
+            body.position.y = 0.2;
+            group.add(body);
+            
+            const head = new THREE.Mesh(
+                new THREE.SphereGeometry(0.15, 8, 8),
+                new THREE.MeshStandardMaterial({ color: 0xffd93d })
+            );
+            head.position.y = 0.5;
+            group.add(head);
+            
+            const armMat = new THREE.MeshStandardMaterial({ color });
+            const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.08), armMat);
+            leftArm.position.set(-0.25, 0.3, 0);
+            group.add(leftArm);
+            
+            const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.08), armMat);
+            rightArm.position.set(0.25, 0.3, 0);
+            group.add(rightArm);
+            
+            const legMat = new THREE.MeshStandardMaterial({ color: 0x1a1a2e });
+            const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.08), legMat);
+            leftLeg.position.set(-0.1, -0.1, 0);
+            group.add(leftLeg);
+            
+            const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.08), legMat);
+            rightLeg.position.set(0.1, -0.1, 0);
+            group.add(rightLeg);
+            
+            return group;
+        }
+
+        // ============================================================
+        // SETUP SCENE (Shared for AR and Desktop)
+        // ============================================================
+        function setupScene() {
             debug('Setting up scene...');
             
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x000000);
+            scene.background = new THREE.Color(0x1a1a2e);
             
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 1.6, 0);
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 1.5, 3);
             
             renderer = new THREE.WebGLRenderer({
                 antialias: true,
@@ -214,9 +272,17 @@
             });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-            renderer.xr.enabled = true;
+            renderer.shadowMap.enabled = true;
             
             container.appendChild(renderer.domElement);
+            
+            // Controls (for desktop)
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.target.set(0, 0.5, 0);
+            controls.minDistance = 1;
+            controls.maxDistance = 10;
             
             // Lights
             const ambient = new THREE.AmbientLight(0x404040, 0.5);
@@ -224,19 +290,19 @@
             
             const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
             dirLight.position.set(0, 5, 5);
+            dirLight.castShadow = true;
             scene.add(dirLight);
             
             const fill = new THREE.DirectionalLight(0x4488ff, 0.3);
             fill.position.set(-5, 0, 5);
             scene.add(fill);
             
-            const back = new THREE.DirectionalLight(0xff8844, 0.2);
-            back.position.set(0, 0, -5);
-            scene.add(back);
+            const hemi = new THREE.HemisphereLight(0x87ceeb, 0x362d1e, 0.3);
+            scene.add(hemi);
             
             // Ground
             const ground = new THREE.Mesh(
-                new THREE.PlaneGeometry(3, 3),
+                new THREE.PlaneGeometry(4, 4),
                 new THREE.MeshStandardMaterial({ 
                     color: 0x1a1a2e,
                     roughness: 0.8,
@@ -247,10 +313,11 @@
             );
             ground.rotation.x = -Math.PI / 2;
             ground.position.y = -0.1;
+            ground.receiveShadow = true;
             scene.add(ground);
             
             // Grid
-            const grid = new THREE.GridHelper(3, 10, 0xff6b6b, 0x444466);
+            const grid = new THREE.GridHelper(4, 10, 0xff6b6b, 0x444466);
             grid.position.y = -0.05;
             scene.add(grid);
             
@@ -264,150 +331,150 @@
         }
 
         // ============================================================
-        // REQUEST CAMERA PERMISSION
+        // START DESKTOP MODE
         // ============================================================
-        async function requestCameraPermission() {
-            debug('📷 Requesting camera permission...');
-            updateStatus('📷 Requesting camera...');
-            startBtn.disabled = true;
-            startBtn.textContent = '⏳ Requesting...';
-
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' }
+        async function startDesktopMode() {
+            debug('🖥️ Starting desktop mode...');
+            showMessage('🖥️ Desktop Mode - Use mouse to rotate', '');
+            
+            // Add fighters
+            if (fighterModel) {
+                const playerClone = fighterModel.clone();
+                playerClone.position.set(-0.8, 0, 0);
+                scene.add(playerClone);
+                fighterModel = playerClone;
+                
+                const enemyClone = fighterModel.clone();
+                enemyClone.position.set(0.8, 0, 0);
+                enemyClone.scale.set(0.8, 0.8, 0.8);
+                enemyClone.traverse((node) => {
+                    if (node.isMesh) {
+                        if (node.material && node.material.color) {
+                            node.material.color.setHex(0xff6b6b);
+                        }
+                    }
                 });
-                
-                hasPermission = true;
-                stream.getTracks().forEach(track => track.stop());
-                
-                debug('✅ Camera permission granted');
-                updateStatus('✅ Camera ready');
-                startBtn.textContent = '⚔️ Start Battle';
-                startBtn.disabled = false;
-                return true;
-                
-            } catch (error) {
-                debug('❌ Camera denied: ' + error.message);
-                updateStatus('❌ Camera needed - check settings');
-                startBtn.textContent = '🔄 Retry';
-                startBtn.disabled = false;
-                showMessage('❌ Camera permission required', 'error');
-                return false;
+                scene.add(enemyClone);
+                enemyModel = enemyClone;
+                debug('✅ Fighters added to scene');
             }
+            
+            startScreen.classList.add('hidden');
+            gameUI.style.display = 'block';
+            isGameRunning = true;
+            
+            // Initialize game
+            initGame();
+            
+            // Start animation loop
+            animate();
+            
+            showMessage('🥊 Fight! Use keyboard (1=Punch, 2=Block, 3=Special)', '');
+            
+            // Keyboard controls for desktop
+            document.addEventListener('keydown', (e) => {
+                if (game && !game.isGameOver) {
+                    switch(e.key) {
+                        case '1':
+                            game.playerAction({ type: 'punch', confidence: 1.0 });
+                            break;
+                        case '2':
+                            game.playerAction({ type: 'block', confidence: 1.0 });
+                            break;
+                        case '3':
+                            game.playerAction({ type: 'special', confidence: 1.0 });
+                            break;
+                        case 'r':
+                            if (game.isGameOver) {
+                                gameOver.style.display = 'none';
+                                game.reset();
+                                showMessage('🥊 Fight!', '');
+                            }
+                            break;
+                    }
+                }
+            });
         }
 
         // ============================================================
-        // START AR
+        // START AR MODE (Mobile)
         // ============================================================
-        async function startAR() {
-            debug('🚀 Starting AR...');
-            showMessage('📷 Starting AR...', '');
-            startBtn.disabled = true;
-            startBtn.textContent = '⏳ Starting...';
-
-            try {
-                if (!navigator.xr) {
-                    throw new Error('WebXR not supported');
-                }
-
-                let supported = false;
-                try {
-                    supported = await navigator.xr.isSessionSupported('immersive-ar');
-                } catch (e) {
-                    throw new Error('AR not supported');
-                }
-
-                if (!supported) {
-                    throw new Error('AR not supported on this device');
-                }
-
-                if (!hasPermission) {
-                    const granted = await requestCameraPermission();
-                    if (!granted) {
-                        throw new Error('Camera permission required');
-                    }
-                }
-
-                const session = await navigator.xr.requestSession('immersive-ar', {
-                    requiredFeatures: ['local-floor']
-                });
-
-                debug('✅ AR Session created!');
-                await renderer.xr.setSession(session);
-
-                // Add fighter to scene
-                if (fighterModel) {
-                    const fighterClone = fighterModel.clone();
-                    fighterClone.position.set(-0.5, 0, -0.5);
-                    scene.add(fighterClone);
-                    fighterModel = fighterClone;
+        async function startARMode() {
+            debug('📱 Starting AR mode...');
+            
+            // Enable AR on renderer
+            renderer.xr.enabled = true;
+            
+            // Create AR button
+            const arButton = ARButton.createButton(renderer, {
+                requiredFeatures: ['local-floor'],
+                onSessionStarted: (session) => {
+                    debug('✅ AR Session started!');
+                    isGameRunning = true;
+                    startScreen.classList.add('hidden');
+                    gameUI.style.display = 'block';
                     
-                    // Add enemy (clone with different color)
-                    const enemyClone = fighterModel.clone();
-                    enemyClone.position.set(0.5, 0, -0.5);
-                    enemyClone.scale.set(0.8, 0.8, 0.8);
-                    // Change color for enemy
-                    enemyClone.traverse((node) => {
-                        if (node.isMesh) {
-                            if (node.material && node.material.color) {
-                                node.material.color.setHex(0xff6b6b);
+                    // Add fighters
+                    if (fighterModel) {
+                        const playerClone = fighterModel.clone();
+                        playerClone.position.set(-0.5, 0, -0.5);
+                        scene.add(playerClone);
+                        fighterModel = playerClone;
+                        
+                        const enemyClone = fighterModel.clone();
+                        enemyClone.position.set(0.5, 0, -0.5);
+                        enemyClone.scale.set(0.8, 0.8, 0.8);
+                        enemyClone.traverse((node) => {
+                            if (node.isMesh) {
+                                if (node.material && node.material.color) {
+                                    node.material.color.setHex(0xff6b6b);
+                                }
                             }
-                        }
+                        });
+                        scene.add(enemyClone);
+                        enemyModel = enemyClone;
+                        debug('✅ Fighters added to AR scene');
+                    }
+                    
+                    // Initialize game
+                    initGame();
+                    
+                    // Start hand tracking
+                    startHandTracking();
+                    
+                    showMessage('🥊 Fight!', '');
+                    
+                    // Animation loop
+                    renderer.setAnimationLoop(() => {
+                        if (game) game.update();
+                        if (fighterModel?.userData?.mixer) fighterModel.userData.mixer.update(0.016);
+                        if (enemyModel?.userData?.mixer) enemyModel.userData.mixer.update(0.016);
+                        renderer.render(scene, camera);
                     });
-                    scene.add(enemyClone);
-                    enemyModel = enemyClone;
-                    debug('✅ Fighters added to scene');
-                }
-
-                // Hide start screen, show game UI
-                startScreen.classList.add('hidden');
-                gameUI.style.display = 'block';
-                isArRunning = true;
-                
-                // Initialize game
-                initGame();
-                
-                // Start hand tracking
-                startHandTracking();
-                
-                showMessage('🥊 Fight!', '');
-
-                // Animation loop
-                renderer.setAnimationLoop(() => {
-                    // Update game
-                    if (game) {
-                        game.update();
-                    }
-                    
-                    // Animate fighters
-                    if (fighterModel && fighterModel.userData && fighterModel.userData.mixer) {
-                        fighterModel.userData.mixer.update(0.016);
-                    }
-                    if (enemyModel && enemyModel.userData && enemyModel.userData.mixer) {
-                        enemyModel.userData.mixer.update(0.016);
-                    }
-                    
-                    renderer.render(scene, camera);
-                });
-
-                session.addEventListener('end', () => {
+                },
+                onSessionEnded: () => {
                     debug('⏹️ AR Session ended');
-                    isArRunning = false;
+                    isGameRunning = false;
                     renderer.setAnimationLoop(null);
                     gameUI.style.display = 'none';
                     startScreen.classList.remove('hidden');
-                    startBtn.textContent = '⚔️ Restart Battle';
-                    startBtn.disabled = false;
-                    if (handTracker) handTracker.stop();
-                    showMessage('Session ended', '');
-                });
-
-            } catch (error) {
-                debug('❌ AR start failed: ' + error.message);
-                showMessage('❌ ' + error.message, 'error');
-                startBtn.textContent = '🔄 Retry';
-                startBtn.disabled = false;
-            }
+                    startBtn.textContent = '🎮 Start Game';
+                },
+                onError: (error) => {
+                    debug('❌ AR Error: ' + error.message);
+                    showMessage('❌ ' + error.message, 'error');
+                    // Fallback to desktop mode
+                    startDesktopMode();
+                }
+            });
+            
+            document.body.appendChild(arButton);
+            arButton.click();
+            
+            // Hide button after click
+            setTimeout(() => {
+                if (arButton) arButton.style.display = 'none';
+            }, 2000);
         }
 
         // ============================================================
@@ -419,14 +486,6 @@
             game.onHealthUpdate = (health) => {
                 playerHealthFill.style.width = health.player + '%';
                 enemyHealthFill.style.width = health.enemy + '%';
-                
-                if (health.player < 30) {
-                    playerHealthFill.style.background = 'linear-gradient(90deg, #ff4444, #cc0000)';
-                } else if (health.player < 60) {
-                    playerHealthFill.style.background = 'linear-gradient(90deg, #ffd93d, #f0932b)';
-                } else {
-                    playerHealthFill.style.background = 'linear-gradient(90deg, #ff6b6b, #ee5a24)';
-                }
             };
             
             game.onScoreUpdate = (score) => {
@@ -450,11 +509,6 @@
                 gameOver.style.display = 'flex';
                 gameOverTitle.textContent = data.result === 'win' ? '🏆 YOU WIN!' : '💀 YOU LOSE!';
                 gameOverScore.textContent = 'Score: ' + data.score + ' | Max Combo: x' + data.maxCombo;
-                
-                // Animate winner
-                if (data.result === 'win' && fighterModel) {
-                    fighterModel.scale.set(1.2, 1.2, 1.2);
-                }
             };
             
             game.onEnemyAction = (action) => {
@@ -483,7 +537,7 @@
         }
 
         // ============================================================
-        // HAND TRACKING
+        // HAND TRACKING (Mobile)
         // ============================================================
         function startHandTracking() {
             handTracker = new HandTracker({
@@ -493,52 +547,76 @@
                     }
                 },
                 onHandPosition: (position) => {
-                    // Optional: move fighter with hand
                     if (fighterModel && position) {
-                        // Smooth follow
                         fighterModel.position.x = position.x * 0.5;
                         fighterModel.position.z = position.z * 0.5 - 0.5;
                     }
                 }
             });
-            
             handTracker.start();
+        }
+
+        // ============================================================
+        // ANIMATION LOOP (Desktop)
+        // ============================================================
+        function animate() {
+            if (!isGameRunning) return;
+            
+            requestAnimationFrame(animate);
+            
+            if (game) game.update();
+            if (fighterModel?.userData?.mixer) fighterModel.userData.mixer.update(0.016);
+            if (enemyModel?.userData?.mixer) enemyModel.userData.mixer.update(0.016);
+            
+            controls.update();
+            renderer.render(scene, camera);
         }
 
         // ============================================================
         // INITIALIZE
         // ============================================================
         async function init() {
-            debug('🚀 Initializing AR Fighting Game...');
+            debug('🚀 Initializing Fighting Game...');
             
             try {
-                setupThreeScene();
+                // Check device support
+                const device = await checkDeviceSupport();
+                debug('Device:', device);
+                
+                // Setup scene
+                setupScene();
                 
                 // Load fighter model
                 try {
                     fighterModel = await loadFighterModel();
                 } catch (error) {
-                    debug('⚠️ Fighter model not found, using placeholder');
-                    // Create placeholder fighter
+                    debug('⚠️ Model not found, using placeholder');
                     fighterModel = createPlaceholderFighter();
+                }
+                
+                // Show device info
+                if (device.isDesktop) {
+                    deviceInfo.textContent = '🖥️ Desktop Mode - Mouse controls + Keyboard (1=Punch, 2=Block, 3=Special)';
+                    startBtn.textContent = '🎮 Start Desktop Game';
+                } else if (device.isARSupported) {
+                    deviceInfo.textContent = '📱 AR Mode - Use your hands to fight!';
+                    startBtn.textContent = '🥊 Start AR Battle';
+                } else {
+                    deviceInfo.textContent = '📱 Mobile Mode - Touch controls + Hand tracking';
+                    startBtn.textContent = '🎮 Start Game';
                 }
                 
                 // Hide loading
                 loading.classList.add('hidden');
-                
-                // Show start screen
                 startScreen.classList.remove('hidden');
-                updateStatus('⚔️ Tap "Start Battle" to begin');
+                updateStatus('Ready to fight!');
                 
                 // Start button
                 startBtn.addEventListener('click', async () => {
-                    if (!hasPermission) {
-                        const granted = await requestCameraPermission();
-                        if (granted) {
-                            await startAR();
-                        }
+                    if (device.isARSupported && !device.isDesktop) {
+                        await startARMode();
                     } else {
-                        await startAR();
+                        await startDesktopMode();
                     }
                 });
                 
@@ -548,9 +626,6 @@
                     if (game) {
                         game.reset();
                         showMessage('🥊 Fight!', '');
-                        if (fighterModel) {
-                            fighterModel.scale.set(0.8, 0.8, 0.8);
-                        }
                     }
                 });
                 
@@ -559,7 +634,7 @@
                     if (navigator.share) {
                         navigator.share({
                             title: '🥊 AR Fighting Game',
-                            text: `I scored ${game?.score || 0} points in AR Fighting Game! Can you beat me?`,
+                            text: `I scored ${game?.score || 0} points! Can you beat me?`,
                             url: window.location.href
                         }).catch(() => {});
                     } else {
@@ -578,54 +653,6 @@
             }
         }
 
-        // ============================================================
-        // PLACEHOLDER FIGHTER
-        // ============================================================
-        function createPlaceholderFighter() {
-            const group = new THREE.Group();
-            
-            // Body
-            const body = new THREE.Mesh(
-                new THREE.BoxGeometry(0.3, 0.4, 0.2),
-                new THREE.MeshStandardMaterial({ color: 0x00d4ff, metalness: 0.3 })
-            );
-            body.position.y = 0.2;
-            group.add(body);
-            
-            // Head
-            const head = new THREE.Mesh(
-                new THREE.SphereGeometry(0.15, 8, 8),
-                new THREE.MeshStandardMaterial({ color: 0xffd93d })
-            );
-            head.position.y = 0.5;
-            group.add(head);
-            
-            // Arms
-            const armMat = new THREE.MeshStandardMaterial({ color: 0x00d4ff });
-            const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.08), armMat);
-            leftArm.position.set(-0.25, 0.3, 0);
-            group.add(leftArm);
-            
-            const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.08), armMat);
-            rightArm.position.set(0.25, 0.3, 0);
-            group.add(rightArm);
-            
-            // Legs
-            const legMat = new THREE.MeshStandardMaterial({ color: 0x1a1a2e });
-            const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.08), legMat);
-            leftLeg.position.set(-0.1, -0.1, 0);
-            group.add(leftLeg);
-            
-            const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.08), legMat);
-            rightLeg.position.set(0.1, -0.1, 0);
-            group.add(rightLeg);
-            
-            return group;
-        }
-
-        // ============================================================
-        // START
-        // ============================================================
         document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
