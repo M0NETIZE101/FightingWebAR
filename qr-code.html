@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Code - AR Fighting Game</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+        }
+        .card {
+            background: white;
+            padding: 40px;
+            border-radius: 24px;
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        }
+        .logo { font-size: 48px; margin-bottom: 10px; }
+        h1 {
+            color: #1a1a2e;
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        p {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        #qrcode {
+            display: inline-block;
+            padding: 15px;
+            background: white;
+            border-radius: 12px;
+            border: 2px solid #eee;
+        }
+        .instructions {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 12px;
+            font-size: 14px;
+            color: #333;
+            text-align: left;
+        }
+        .instructions strong { color: #ff6b6b; }
+        .instructions li {
+            list-style: none;
+            padding: 4px 0;
+        }
+        .url {
+            margin-top: 15px;
+            font-size: 12px;
+            color: #999;
+            word-break: break-all;
+            background: #f9f9f9;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        @media (max-width: 480px) {
+            .card { padding: 24px; }
+            h1 { font-size: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="logo">🥊</div>
+        <h1>AR Fighting Game</h1>
+        <p>Scan this QR code to start the battle!</p>
+        
+        <div id="qrcode"></div>
+        
+        <div class="instructions">
+            <strong>📱 How to play:</strong>
+            <li>1. Open your phone's camera</li>
+            <li>2. Scan the QR code above</li>
+            <li>3. Grant camera permission</li>
+            <li>4. 👊 Punch to attack!</li>
+            <li>5. 🖐️ Open hand to block!</li>
+            <li>6. ✌️ Peace sign for special!</li>
+        </div>
+        
+        <div class="url" id="urlDisplay"></div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            function getBaseUrl() {
+                const url = new URL(window.location.href);
+                const pathParts = url.pathname.split('/');
+                pathParts.pop();
+                url.pathname = pathParts.join('/') + '/';
+                url.search = '';
+                url.hash = '';
+                return url.toString();
+            }
+
+            const baseUrl = getBaseUrl();
+            
+            new QRCode(document.getElementById('qrcode'), {
+                text: baseUrl,
+                width: 200,
+                height: 200,
+                colorDark: '#1a1a2e',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.H
+            });
+            
+            document.getElementById('urlDisplay').textContent = `📎 ${baseUrl}`;
+        });
+    </script>
+</body>
+</html>

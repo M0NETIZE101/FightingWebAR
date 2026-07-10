@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🥊 AR Fighting Game</title>
+    
+    <link rel="stylesheet" href="css/style.css">
+    
+    <!-- MediaPipe for hand tracking -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    
+    <!-- Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <!-- ===== LOADING ===== -->
+    <div id="loading">
+        <div class="spinner"></div>
+        <p id="loading-text">Loading Fighting Game...</p>
+    </div>
+
+    <!-- ===== START SCREEN ===== -->
+    <div id="start-screen">
+        <div class="card">
+            <div class="logo">🥊</div>
+            <h1>AR Fighting Game</h1>
+            <p>Punch, block, and defeat your opponent!<br>Use your hands to fight in AR!</p>
+            <button id="start-btn">⚔️ Start Battle</button>
+            <p id="status-text" class="status">Ready</p>
+        </div>
+    </div>
+
+    <!-- ===== GAME UI ===== -->
+    <div id="game-ui" style="display: none;">
+        <!-- Health Bars -->
+        <div id="health-container">
+            <div class="health-bar player-health">
+                <div class="health-label">👊 YOU</div>
+                <div class="health-track">
+                    <div id="player-health-fill" class="health-fill" style="width: 100%"></div>
+                </div>
+            </div>
+            <div class="health-bar enemy-health">
+                <div class="health-label">👾 ENEMY</div>
+                <div class="health-track">
+                    <div id="enemy-health-fill" class="health-fill enemy" style="width: 100%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Score -->
+        <div id="score-display">
+            <span id="score-text">Score: 0</span>
+            <span id="combo-text" style="display: none;">🔥 x<span id="combo-count">0</span></span>
+        </div>
+
+        <!-- Gesture Indicator -->
+        <div id="gesture-indicator">
+            <span id="gesture-text">✊ Ready</span>
+        </div>
+
+        <!-- Enemy Status -->
+        <div id="enemy-status">
+            <span id="enemy-state">🧠 Thinking...</span>
+        </div>
+    </div>
+
+    <!-- ===== AR CONTAINER ===== -->
+    <div id="ar-container"></div>
+
+    <!-- ===== STATUS MESSAGE ===== -->
+    <div id="message"></div>
+
+    <!-- ===== GAME OVER OVERLAY ===== -->
+    <div id="game-over" style="display: none;">
+        <div class="game-over-card">
+            <h1 id="game-over-title">🏆 YOU WIN!</h1>
+            <p id="game-over-score">Score: 0</p>
+            <button id="restart-btn">🔄 Fight Again</button>
+            <button id="share-result-btn">📤 Share Result</button>
+        </div>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
