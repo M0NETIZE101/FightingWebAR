@@ -26,7 +26,7 @@
     <!-- ===== LOADING ===== -->
     <div id="loading">
         <div class="spinner"></div>
-        <p id="loading-text">Loading Fighting Game...</p>
+        <p id="loading-text">Loading Fighter...</p>
     </div>
 
     <!-- ===== START SCREEN ===== -->
@@ -42,7 +42,6 @@
 
     <!-- ===== GAME UI ===== -->
     <div id="game-ui" style="display: none;">
-        <!-- Health Bars -->
         <div id="health-container">
             <div class="health-bar player-health">
                 <div class="health-label">👊 YOU</div>
@@ -58,18 +57,15 @@
             </div>
         </div>
 
-        <!-- Score -->
         <div id="score-display">
             <span id="score-text">Score: 0</span>
             <span id="combo-text" style="display: none;">🔥 x<span id="combo-count">0</span></span>
         </div>
 
-        <!-- Gesture Indicator -->
         <div id="gesture-indicator">
             <span id="gesture-text">✊ Ready</span>
         </div>
 
-        <!-- Enemy Status -->
         <div id="enemy-status">
             <span id="enemy-state">🧠 Thinking...</span>
         </div>
@@ -81,7 +77,7 @@
     <!-- ===== STATUS MESSAGE ===== -->
     <div id="message"></div>
 
-    <!-- ===== GAME OVER OVERLAY ===== -->
+    <!-- ===== GAME OVER ===== -->
     <div id="game-over" style="display: none;">
         <div class="game-over-card">
             <h1 id="game-over-title">🏆 YOU WIN!</h1>
@@ -91,6 +87,546 @@
         </div>
     </div>
 
-    <script type="module" src="js/main.js"></script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+        import { HandTracker } from './js/hand-tracker.js';
+        import { FightingGame } from './js/game.js';
+
+        // ============================================================
+        // DOM REFS
+        // ============================================================
+        const loading = document.getElementById('loading');
+        const loadingText = document.getElementById('loading-text');
+        const startScreen = document.getElementById('start-screen');
+        const startBtn = document.getElementById('start-btn');
+        const statusText = document.getElementById('status-text');
+        const message = document.getElementById('message');
+        const container = document.getElementById('ar-container');
+        const gameUI = document.getElementById('game-ui');
+        const playerHealthFill = document.getElementById('player-health-fill');
+        const enemyHealthFill = document.getElementById('enemy-health-fill');
+        const scoreText = document.getElementById('score-text');
+        const comboText = document.getElementById('combo-text');
+        const comboCount = document.getElementById('combo-count');
+        const gestureText = document.getElementById('gesture-text');
+        const enemyState = document.getElementById('enemy-state');
+        const gameOver = document.getElementById('game-over');
+        const gameOverTitle = document.getElementById('game-over-title');
+        const gameOverScore = document.getElementById('game-over-score');
+        const restartBtn = document.getElementById('restart-btn');
+        const shareResultBtn = document.getElementById('share-result-btn');
+
+        // ============================================================
+        // STATE
+        // ============================================================
+        let scene, camera, renderer;
+        let game = null;
+        let handTracker = null;
+        let fighterModel = null;
+        let enemyModel = null;
+        let isArRunning = false;
+        let hasPermission = false;
+        let messageTimeout = null;
+
+        // ============================================================
+        // HELPERS
+        // ============================================================
+        function showMessage(text, type = '') {
+            message.textContent = text;
+            message.className = 'show ' + type;
+            clearTimeout(messageTimeout);
+            messageTimeout = setTimeout(() => {
+                message.className = '';
+            }, 1500);
+        }
+
+        function updateStatus(text) {
+            statusText.textContent = text;
+        }
+
+        function debug(text) {
+            console.log('🔍', text);
+        }
+
+        // ============================================================
+        // LOAD FIGHTER MODEL
+        // ============================================================
+        async function loadFighterModel() {
+            return new Promise((resolve, reject) => {
+                loadingText.textContent = '🦸 Loading Fighter...';
+                debug('Loading fighter model...');
+
+                const loader = new GLTFLoader();
+                const dracoLoader = new DRACOLoader();
+                dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+                loader.setDRACOLoader(dracoLoader);
+
+                loader.load(
+                    './models/fighter/fighter.glb',  // ← YOUR FILE PATH
+                    (gltf) => {
+                        debug('✅ Fighter model loaded!');
+                        const model = gltf.scene;
+                        
+                        // Scale and position
+                        model.scale.set(0.8, 0.8, 0.8);
+                        model.position.set(0, 0, 0);
+                        
+                        // Setup animations
+                        if (gltf.animations && gltf.animations.length > 0) {
+                            const mixer = new THREE.AnimationMixer(model);
+                            const action = mixer.clipAction(gltf.animations[0]);
+                            action.play();
+                            model.userData.mixer = mixer;
+                            debug('🎬 Animation playing');
+                        }
+                        
+                        resolve(model);
+                    },
+                    (progress) => {
+                        const pct = Math.round((progress.loaded / progress.total) * 100);
+                        loadingText.textContent = `📥 Loading... ${pct}%`;
+                    },
+                    (error) => {
+                        debug('❌ Model error: ' + error.message);
+                        reject(error);
+                    }
+                );
+            });
+        }
+
+        // ============================================================
+        // SETUP THREE.JS
+        // ============================================================
+        function setupThreeScene() {
+            debug('Setting up scene...');
+            
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+            
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 1.6, 0);
+            
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: false
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.xr.enabled = true;
+            
+            container.appendChild(renderer.domElement);
+            
+            // Lights
+            const ambient = new THREE.AmbientLight(0x404040, 0.5);
+            scene.add(ambient);
+            
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            dirLight.position.set(0, 5, 5);
+            scene.add(dirLight);
+            
+            const fill = new THREE.DirectionalLight(0x4488ff, 0.3);
+            fill.position.set(-5, 0, 5);
+            scene.add(fill);
+            
+            const back = new THREE.DirectionalLight(0xff8844, 0.2);
+            back.position.set(0, 0, -5);
+            scene.add(back);
+            
+            // Ground
+            const ground = new THREE.Mesh(
+                new THREE.PlaneGeometry(3, 3),
+                new THREE.MeshStandardMaterial({ 
+                    color: 0x1a1a2e,
+                    roughness: 0.8,
+                    metalness: 0.1,
+                    transparent: true,
+                    opacity: 0.8
+                })
+            );
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.1;
+            scene.add(ground);
+            
+            // Grid
+            const grid = new THREE.GridHelper(3, 10, 0xff6b6b, 0x444466);
+            grid.position.y = -0.05;
+            scene.add(grid);
+            
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+            
+            debug('✅ Scene setup complete');
+        }
+
+        // ============================================================
+        // REQUEST CAMERA PERMISSION
+        // ============================================================
+        async function requestCameraPermission() {
+            debug('📷 Requesting camera permission...');
+            updateStatus('📷 Requesting camera...');
+            startBtn.disabled = true;
+            startBtn.textContent = '⏳ Requesting...';
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }
+                });
+                
+                hasPermission = true;
+                stream.getTracks().forEach(track => track.stop());
+                
+                debug('✅ Camera permission granted');
+                updateStatus('✅ Camera ready');
+                startBtn.textContent = '⚔️ Start Battle';
+                startBtn.disabled = false;
+                return true;
+                
+            } catch (error) {
+                debug('❌ Camera denied: ' + error.message);
+                updateStatus('❌ Camera needed - check settings');
+                startBtn.textContent = '🔄 Retry';
+                startBtn.disabled = false;
+                showMessage('❌ Camera permission required', 'error');
+                return false;
+            }
+        }
+
+        // ============================================================
+        // START AR
+        // ============================================================
+        async function startAR() {
+            debug('🚀 Starting AR...');
+            showMessage('📷 Starting AR...', '');
+            startBtn.disabled = true;
+            startBtn.textContent = '⏳ Starting...';
+
+            try {
+                if (!navigator.xr) {
+                    throw new Error('WebXR not supported');
+                }
+
+                let supported = false;
+                try {
+                    supported = await navigator.xr.isSessionSupported('immersive-ar');
+                } catch (e) {
+                    throw new Error('AR not supported');
+                }
+
+                if (!supported) {
+                    throw new Error('AR not supported on this device');
+                }
+
+                if (!hasPermission) {
+                    const granted = await requestCameraPermission();
+                    if (!granted) {
+                        throw new Error('Camera permission required');
+                    }
+                }
+
+                const session = await navigator.xr.requestSession('immersive-ar', {
+                    requiredFeatures: ['local-floor']
+                });
+
+                debug('✅ AR Session created!');
+                await renderer.xr.setSession(session);
+
+                // Add fighter to scene
+                if (fighterModel) {
+                    const fighterClone = fighterModel.clone();
+                    fighterClone.position.set(-0.5, 0, -0.5);
+                    scene.add(fighterClone);
+                    fighterModel = fighterClone;
+                    
+                    // Add enemy (clone with different color)
+                    const enemyClone = fighterModel.clone();
+                    enemyClone.position.set(0.5, 0, -0.5);
+                    enemyClone.scale.set(0.8, 0.8, 0.8);
+                    // Change color for enemy
+                    enemyClone.traverse((node) => {
+                        if (node.isMesh) {
+                            if (node.material && node.material.color) {
+                                node.material.color.setHex(0xff6b6b);
+                            }
+                        }
+                    });
+                    scene.add(enemyClone);
+                    enemyModel = enemyClone;
+                    debug('✅ Fighters added to scene');
+                }
+
+                // Hide start screen, show game UI
+                startScreen.classList.add('hidden');
+                gameUI.style.display = 'block';
+                isArRunning = true;
+                
+                // Initialize game
+                initGame();
+                
+                // Start hand tracking
+                startHandTracking();
+                
+                showMessage('🥊 Fight!', '');
+
+                // Animation loop
+                renderer.setAnimationLoop(() => {
+                    // Update game
+                    if (game) {
+                        game.update();
+                    }
+                    
+                    // Animate fighters
+                    if (fighterModel && fighterModel.userData && fighterModel.userData.mixer) {
+                        fighterModel.userData.mixer.update(0.016);
+                    }
+                    if (enemyModel && enemyModel.userData && enemyModel.userData.mixer) {
+                        enemyModel.userData.mixer.update(0.016);
+                    }
+                    
+                    renderer.render(scene, camera);
+                });
+
+                session.addEventListener('end', () => {
+                    debug('⏹️ AR Session ended');
+                    isArRunning = false;
+                    renderer.setAnimationLoop(null);
+                    gameUI.style.display = 'none';
+                    startScreen.classList.remove('hidden');
+                    startBtn.textContent = '⚔️ Restart Battle';
+                    startBtn.disabled = false;
+                    if (handTracker) handTracker.stop();
+                    showMessage('Session ended', '');
+                });
+
+            } catch (error) {
+                debug('❌ AR start failed: ' + error.message);
+                showMessage('❌ ' + error.message, 'error');
+                startBtn.textContent = '🔄 Retry';
+                startBtn.disabled = false;
+            }
+        }
+
+        // ============================================================
+        // INIT GAME
+        // ============================================================
+        function initGame() {
+            game = new FightingGame();
+            
+            game.onHealthUpdate = (health) => {
+                playerHealthFill.style.width = health.player + '%';
+                enemyHealthFill.style.width = health.enemy + '%';
+                
+                if (health.player < 30) {
+                    playerHealthFill.style.background = 'linear-gradient(90deg, #ff4444, #cc0000)';
+                } else if (health.player < 60) {
+                    playerHealthFill.style.background = 'linear-gradient(90deg, #ffd93d, #f0932b)';
+                } else {
+                    playerHealthFill.style.background = 'linear-gradient(90deg, #ff6b6b, #ee5a24)';
+                }
+            };
+            
+            game.onScoreUpdate = (score) => {
+                scoreText.textContent = 'Score: ' + score;
+            };
+            
+            game.onComboUpdate = (comboData) => {
+                if (comboData.combo > 1) {
+                    comboText.style.display = 'block';
+                    comboCount.textContent = comboData.combo;
+                } else {
+                    comboText.style.display = 'none';
+                }
+            };
+            
+            game.onMessage = (text, type) => {
+                showMessage(text, type);
+            };
+            
+            game.onGameOver = (data) => {
+                gameOver.style.display = 'flex';
+                gameOverTitle.textContent = data.result === 'win' ? '🏆 YOU WIN!' : '💀 YOU LOSE!';
+                gameOverScore.textContent = 'Score: ' + data.score + ' | Max Combo: x' + data.maxCombo;
+                
+                // Animate winner
+                if (data.result === 'win' && fighterModel) {
+                    fighterModel.scale.set(1.2, 1.2, 1.2);
+                }
+            };
+            
+            game.onEnemyAction = (action) => {
+                const labels = {
+                    'attack': '⚔️ Attacking!',
+                    'block': '🛡️ Blocking!',
+                    'special': '⚡ Special!',
+                    'idle': '🧠 Thinking...',
+                    'reaction': '💥 Stunned!'
+                };
+                enemyState.textContent = labels[action] || '🧠 Thinking...';
+            };
+            
+            game.onPlayerAction = (gesture) => {
+                const labels = {
+                    'punch': '👊 Punch!',
+                    'block': '🛡️ Block!',
+                    'special': '⚡ Special!',
+                    'fist': '✊ Ready',
+                    'open': '🖐️ Open'
+                };
+                gestureText.textContent = labels[gesture.type] || '✊ Ready';
+            };
+            
+            game.reset();
+        }
+
+        // ============================================================
+        // HAND TRACKING
+        // ============================================================
+        function startHandTracking() {
+            handTracker = new HandTracker({
+                onGesture: (gesture) => {
+                    if (game && !game.isGameOver) {
+                        game.playerAction(gesture);
+                    }
+                },
+                onHandPosition: (position) => {
+                    // Optional: move fighter with hand
+                    if (fighterModel && position) {
+                        // Smooth follow
+                        fighterModel.position.x = position.x * 0.5;
+                        fighterModel.position.z = position.z * 0.5 - 0.5;
+                    }
+                }
+            });
+            
+            handTracker.start();
+        }
+
+        // ============================================================
+        // INITIALIZE
+        // ============================================================
+        async function init() {
+            debug('🚀 Initializing AR Fighting Game...');
+            
+            try {
+                setupThreeScene();
+                
+                // Load fighter model
+                try {
+                    fighterModel = await loadFighterModel();
+                } catch (error) {
+                    debug('⚠️ Fighter model not found, using placeholder');
+                    // Create placeholder fighter
+                    fighterModel = createPlaceholderFighter();
+                }
+                
+                // Hide loading
+                loading.classList.add('hidden');
+                
+                // Show start screen
+                startScreen.classList.remove('hidden');
+                updateStatus('⚔️ Tap "Start Battle" to begin');
+                
+                // Start button
+                startBtn.addEventListener('click', async () => {
+                    if (!hasPermission) {
+                        const granted = await requestCameraPermission();
+                        if (granted) {
+                            await startAR();
+                        }
+                    } else {
+                        await startAR();
+                    }
+                });
+                
+                // Restart button
+                restartBtn.addEventListener('click', () => {
+                    gameOver.style.display = 'none';
+                    if (game) {
+                        game.reset();
+                        showMessage('🥊 Fight!', '');
+                        if (fighterModel) {
+                            fighterModel.scale.set(0.8, 0.8, 0.8);
+                        }
+                    }
+                });
+                
+                // Share button
+                shareResultBtn.addEventListener('click', () => {
+                    if (navigator.share) {
+                        navigator.share({
+                            title: '🥊 AR Fighting Game',
+                            text: `I scored ${game?.score || 0} points in AR Fighting Game! Can you beat me?`,
+                            url: window.location.href
+                        }).catch(() => {});
+                    } else {
+                        navigator.clipboard?.writeText('I played AR Fighting Game! 🥊').then(() => {
+                            showMessage('📋 Copied!', '');
+                        });
+                    }
+                });
+                
+                debug('✅ Ready!');
+                
+            } catch (error) {
+                debug('❌ Init error: ' + error.message);
+                loadingText.textContent = '❌ Error loading';
+                showMessage('Failed to load: ' + error.message, 'error');
+            }
+        }
+
+        // ============================================================
+        // PLACEHOLDER FIGHTER
+        // ============================================================
+        function createPlaceholderFighter() {
+            const group = new THREE.Group();
+            
+            // Body
+            const body = new THREE.Mesh(
+                new THREE.BoxGeometry(0.3, 0.4, 0.2),
+                new THREE.MeshStandardMaterial({ color: 0x00d4ff, metalness: 0.3 })
+            );
+            body.position.y = 0.2;
+            group.add(body);
+            
+            // Head
+            const head = new THREE.Mesh(
+                new THREE.SphereGeometry(0.15, 8, 8),
+                new THREE.MeshStandardMaterial({ color: 0xffd93d })
+            );
+            head.position.y = 0.5;
+            group.add(head);
+            
+            // Arms
+            const armMat = new THREE.MeshStandardMaterial({ color: 0x00d4ff });
+            const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.08), armMat);
+            leftArm.position.set(-0.25, 0.3, 0);
+            group.add(leftArm);
+            
+            const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.08), armMat);
+            rightArm.position.set(0.25, 0.3, 0);
+            group.add(rightArm);
+            
+            // Legs
+            const legMat = new THREE.MeshStandardMaterial({ color: 0x1a1a2e });
+            const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.08), legMat);
+            leftLeg.position.set(-0.1, -0.1, 0);
+            group.add(leftLeg);
+            
+            const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.08), legMat);
+            rightLeg.position.set(0.1, -0.1, 0);
+            group.add(rightLeg);
+            
+            return group;
+        }
+
+        // ============================================================
+        // START
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
 </body>
 </html>
